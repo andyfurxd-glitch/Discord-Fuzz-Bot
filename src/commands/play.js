@@ -66,10 +66,9 @@ async function getScrapedSpotifyTracks(url) {
 // RESOLVE TRACKS
 // ---------------------------------------------------------
 
-async function resolveTracks(query) {
-
-    const isSpotify =
-        query.toLowerCase().includes("spotify.com");
+async function resolveTracks(query) {    const isSpotify =
+        query.toLowerCase().includes("spotify.com") ||
+        query.toLowerCase().startsWith("spotify:");
 
 
     // =====================================================
@@ -80,9 +79,11 @@ async function resolveTracks(query) {
 
         const isPlaylistOrAlbum =
             query.includes("/playlist/") ||
-            query.includes("/album/");
+            query.includes("/album/") ||
+            query.startsWith("spotify:playlist:") ||
+            query.startsWith("spotify:album:");
 
-        if (query.includes("/playlist/")) {
+        if (isPlaylistOrAlbum) {
             const tracks = await getScrapedSpotifyTracks(query);
 
             if (!tracks.length) {
@@ -90,19 +91,6 @@ async function resolveTracks(query) {
             }
 
             return tracks;
-        }
-
-
-        // -------------------------------------------------
-        // PLAYLIST / ALBUM
-        // -------------------------------------------------
-
-        if (isPlaylistOrAlbum) {
-
-            throw (
-                "🐺 **ARF!** Spotify playlists aren't ready yet!\n\n" +
-                "🎵 Try a single Spotify song link for now."
-            );
         }
 
 
@@ -128,7 +116,7 @@ async function resolveTracks(query) {
             );
 
             throw (
-                "� **Awoo...** Couldn't sniff out that Spotify track.\n" +
+                "🐾 **Awoo...** Couldn't sniff out that Spotify track.\n" +
                 "Try searching by name? *Ears droop in sadness...*"
             );
         }
@@ -162,24 +150,34 @@ async function resolveTracks(query) {
 
 function resolveYouTube(searchArg) {
 
+    const isPlaylist =
+        searchArg.includes("playlist?list=") ||
+        searchArg.includes("&list=") ||
+        searchArg.includes("/playlist");
+
+    const args = [
+        "--print",
+        "%(title)s---%(webpage_url)s---%(duration)s",
+        "--extractor-args",
+        "youtube:player_client=android"
+    ];
+
+    if (isPlaylist) {
+        args.unshift("--flat-playlist", "--yes-playlist");
+    } else {
+        args.unshift("--no-playlist");
+    }
+
+    args.push(searchArg);
+
     return new Promise((resolve, reject) => {
 
         execFile(
             "yt-dlp",
-
-            [
-                "--flat-playlist",
-                "--print",
-                "%(title)s---%(webpage_url)s",
-                "--no-playlist",
-                "--extractor-args",
-                "youtube:player_client=android",
-                searchArg
-            ],
-
+            args,
             {
-                timeout: 8000,
-                maxBuffer: 1024 * 1024 * 5
+                timeout: isPlaylist ? 25000 : 8000,
+                maxBuffer: 1024 * 1024 * 10
             },
 
             (error, stdout, stderr) => {
@@ -204,6 +202,8 @@ function resolveYouTube(searchArg) {
 
                     const title = parts[0].trim();
                     const url = parts[1].trim();
+                    const durationSec = parts[2] ? parseFloat(parts[2].trim()) : 0;
+                    const durationMs = (durationSec && !isNaN(durationSec) && durationSec > 0) ? durationSec * 1000 : 0;
 
                     if (!url) {
                         continue;
@@ -212,7 +212,7 @@ function resolveYouTube(searchArg) {
                     songs.push({
                         title: title || "Cozy Track 🎶",
                         url,
-                        durationMs: 0 // Will be fetched on playback
+                        durationMs
                     });
                 }
 
@@ -307,6 +307,7 @@ module.exports = {
             // allowing Discord connection and YouTube lookup to overlap.
             const preloadPlayer = getPlayer(interaction.guild.id);
             const preloadQueue = getOrCreateQueue(interaction.guild.id, preloadPlayer, interaction.channel);
+            preloadQueue.voiceChannelId = voiceChannel.id;
 
             if (!preloadQueue.connection) {
                 preloadQueue.connection = joinVoiceChannel({
@@ -351,7 +352,7 @@ module.exports = {
                     musicPlayer,
                     interaction.channel
                 );
-
+            queue.voiceChannelId = voiceChannel.id;
 
             // -------------------------------------------------
             // JOIN VOICE
@@ -410,12 +411,7 @@ module.exports = {
                 if (startsImmediately) {
                     queue.suppressNowPlayingMessage = true;
 
-                    let durationMs = songs[0].durationMs || 0;
-                    if ((!durationMs || durationMs <= 0) && songs[0].url) {
-                        durationMs = await fetchDuration(songs[0].url);
-                    }
-
-                    const durationText = formatDuration(durationMs);
+                    const durationText = formatDuration(songs[0].durationMs);
                     await interaction.editReply(
                         `🎵 **Now pouncing:** ${songs[0].title}${songs[0].artist ? ` — *${songs[0].artist}*` : ""}\n\n` +
                         `⏱️ Duration: **${durationText}** 🐾`

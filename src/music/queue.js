@@ -9,8 +9,11 @@ function createQueue(guildId, player = null) {
         current: null,
         loading: false,
         textChannel: null, // 🐾 Added to remember where to send messages
+        voiceChannelId: null,
         spotifyRetryScheduled: false,
-        suppressNowPlayingMessage: false
+        suppressNowPlayingMessage: false,
+        idleTimeout: null,
+        emptyTimeout: null
     };
 
     queues.set(guildId, queue);
@@ -41,7 +44,23 @@ function getOrCreateQueue(guildId, player = null, textChannel = null) {
     return queue;
 }
 
+function clearQueueTimeouts(queue) {
+    if (!queue) return;
+    if (queue.idleTimeout) {
+        clearTimeout(queue.idleTimeout);
+        queue.idleTimeout = null;
+    }
+    if (queue.emptyTimeout) {
+        clearTimeout(queue.emptyTimeout);
+        queue.emptyTimeout = null;
+    }
+}
+
 function deleteQueue(guildId) {
+    const queue = queues.get(guildId);
+    if (queue) {
+        clearQueueTimeouts(queue);
+    }
     queues.delete(guildId);
 }
 
@@ -49,5 +68,6 @@ module.exports = {
     createQueue,
     getQueue,
     getOrCreateQueue,
+    clearQueueTimeouts,
     deleteQueue
 };

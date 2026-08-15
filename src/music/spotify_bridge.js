@@ -1,173 +1,293 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+let cachedToken = null;
+let tokenExpiresAt = 0;
+
 /**
- * Scrape Spotify track metadata from a public track URL
- * @param {string} url - Spotify track URL
- * @returns {object|null} Track data or null if invalid
+ * Bootstrap an anonymous session token from Spotify's web player embed
+ * @returns {Promise<string>}
  */
-async function getTrackData(url) {
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            },
-            timeout: 8000
-        });
-
-        const $ = cheerio.load(response.data);
-        
-        // Extract JSON-LD metadata from page
-        const jsonLd = $('script[type="application/ld+json"]').html();
-        if (!jsonLd) {
-            return null;
-        }
-
-        const data = JSON.parse(jsonLd);
-        
-        const title = data.name || "";
-        const artists = data.byArtist?.map(a => a.name).filter(Boolean) || [];
-        const durationMs = parseDuration(data.duration) || 0;
-
-        if (!title || artists.length === 0) {
-            return null;
-        }
-
-        return {
-            title: title.trim(),
-            artist: artists.join(", "),
-            duration_ms: durationMs
-        };
-    } catch (error) {
-        console.error("Error fetching track data:", error.message);
-        return null;
+async function getAnonymousToken() {
+    const now = Date.now();
+    if (cachedToken && now < tokenExpiresAt - 60000) {
+        return cachedToken;
     }
+
+    const res = await axios.get("https://open.spotify.com/embed/track/4uLU6hMCjMI75M1A2tKUQC", {
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
+        },
+        timeout: 10000
+    });
+
+    const $ = cheerio.load(res.data);
+    const nextData = $('script#__NEXT_DATA__').html();
+    if (!nextData) {
+        throw new Error("Could not load Spotify embed session");
+    }
+
+    const json = JSON.parse(nextData);
+    const session =
+        json.props?.pageProps?.state?.settings?.session ||
+        json.props?.pageProps?.state?.data?.session ||
+        json.props?.pageProps?.session;
+
+    const token = session?.accessToken || nextData.match(/"accessToken":"([^"]+)"/)?.[1];
+    const expires = session?.accessTokenExpirationTimestampMs || (Date.now() + 3600000);
+
+    if (!token) {
+        throw new Error("Failed to extract Spotify session token");
+    }
+
+    cachedToken = token;
+    tokenExpiresAt = expires;
+    return cachedToken;
 }
 
 /**
- * Convert ISO 8601 duration (PT5M30S) to milliseconds
- * @param {string} duration - ISO 8601 duration string
- * @returns {number} Duration in milliseconds
+ * Parse entity type and id from URL or URI
+ * @param {string} urlOrUri 
  */
-function parseDuration(duration) {
-    if (!duration || typeof duration !== "string") return 0;
+function parseSpotifyUrl(urlOrUri) {
+    const clean = urlOrUri.trim();
+    if (clean.startsWith("spotify:")) {
+        const parts = clean.split(":");
+        if (parts.length >= 3) {
+            return { type: parts[1], id: parts[2] };
+        }
+    }
 
-    const regex = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/;
-    const match = duration.match(regex);
+    const match = clean.match(/open\.spotify\.com\/(track|playlist|album|artist)\/([a-zA-Z0-9]+)/);
+    if (match) {
+        return { type: match[1], id: match[2] };
+    }
 
-    if (!match) return 0;
-
-    const hours = parseInt(match[1] || 0, 10);
-    const minutes = parseInt(match[2] || 0, 10);
-    const seconds = parseInt(match[3] || 0, 10);
-
-    return (hours * 3600 + minutes * 60 + seconds) * 1000;
+    return { type: null, id: null };
 }
 
 /**
- * Scrape Spotify playlist metadata
- * @param {string} url - Spotify playlist URL
- * @returns {object} Playlist data with tracks array
+ * Extract normalized track information
+ * @param {object} item 
  */
-async function getPlaylistData(url) {
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            },
-            timeout: 10000
-        });
+function extractTrack(item) {
+    if (!item) return null;
+    const data = item.itemV2?.data || item.data || item.track || item;
+    const title = data.name || data.title || "";
+    if (!title) return null;
 
-        const $ = cheerio.load(response.data);
-        
-        // Extract playlist name
-        const playlistName = $('h1, meta[property="og:title"]').first().attr("content") || "Spotify playlist";
-
-        // Extract JSON-LD data which contains playlist items
-        const jsonLd = $('script[type="application/ld+json"]').html();
-        if (!jsonLd) {
-            return { name: playlistName, tracks: [] };
+    const artists = [];
+    const items = data.artists?.items || data.artists || [];
+    if (Array.isArray(items)) {
+        for (const a of items) {
+            const name = a?.profile?.name || a?.name;
+            if (name) artists.push(name);
         }
+    } else if (typeof items === "string") {
+        artists.push(items);
+    }
 
-        const data = JSON.parse(jsonLd);
-        
-        // Handle different JSON-LD structures
-        let tracks = [];
-        
-        if (data.tracks && Array.isArray(data.tracks)) {
-            tracks = data.tracks;
-        } else if (data.itemListElement && Array.isArray(data.itemListElement)) {
-            tracks = data.itemListElement.map(item => item.item || item);
-        }
+    const duration_ms =
+        data.trackDuration?.totalMilliseconds ||
+        data.duration?.totalMilliseconds ||
+        data.duration_ms ||
+        item.duration_ms ||
+        item.duration ||
+        0;
 
-        const result = {
-            name: playlistName.trim(),
-            tracks: []
+    return {
+        title: title.trim(),
+        artist: artists.length > 0 ? artists.join(", ") : "Unknown Artist",
+        duration_ms
+    };
+}
+
+/**
+ * Paginate and fetch all tracks for a playlist via Spotify Pathfinder GraphQL
+ * @param {string} playlistId 
+ */
+async function fetchPlaylistAll(playlistId) {
+    let token = await getAnonymousToken();
+    let offset = 0;
+    const allTracks = [];
+    let playlistName = "Spotify Playlist";
+
+    while (true) {
+        const params = {
+            operationName: "fetchPlaylist",
+            variables: JSON.stringify({
+                uri: `spotify:playlist:${playlistId}`,
+                offset: offset,
+                limit: 100,
+                enableWatchFeedEntrypoint: false
+            }),
+            extensions: JSON.stringify({
+                persistedQuery: {
+                    version: 1,
+                    sha256Hash: "a65e12194ed5fc443a1cdebed5fabe33ca5b07b987185d63c72483867ad13cb4"
+                }
+            })
         };
 
-        for (const track of tracks) {
-            if (track.name && track.byArtist) {
-                const artists = Array.isArray(track.byArtist) 
-                    ? track.byArtist.map(a => a.name || a).join(", ")
-                    : track.byArtist.name || track.byArtist;
-
-                const durationMs = parseDuration(track.duration) || 0;
-
-                result.tracks.push({
-                    title: track.name.trim(),
-                    artist: artists.trim(),
-                    duration_ms: durationMs
+        let res;
+        try {
+            res = await axios.get("https://api-partner.spotify.com/pathfinder/v1/query", {
+                params,
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "app-platform": "WebPlayer",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                },
+                timeout: 15000
+            });
+        } catch (err) {
+            // If token expired, refresh once and retry
+            if (err.response?.status === 401) {
+                cachedToken = null;
+                token = await getAnonymousToken();
+                res = await axios.get("https://api-partner.spotify.com/pathfinder/v1/query", {
+                    params,
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "app-platform": "WebPlayer",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    },
+                    timeout: 15000
                 });
+            } else {
+                break;
             }
         }
 
-        return result;
-    } catch (error) {
-        console.error("Error fetching playlist data:", error.message);
-        return { name: "Spotify playlist", tracks: [] };
+        const union = res?.data?.data?.playlistV2;
+        if (!union) break;
+
+        if (offset === 0 && union.name) {
+            playlistName = union.name;
+        }
+
+        const content = union.content;
+        const totalCount = content?.totalCount || 0;
+        const items = content?.items || [];
+
+        if (!items.length) break;
+
+        for (const item of items) {
+            const t = extractTrack(item);
+            if (t) allTracks.push(t);
+        }
+
+        offset += items.length;
+
+        if (totalCount && offset >= totalCount) {
+            break;
+        }
     }
+
+    if (allTracks.length > 0) {
+        return { name: playlistName, tracks: allTracks };
+    }
+
+    // Fallback to embed if Pathfinder failed
+    return await fetchFromEmbed("playlist", playlistId);
 }
 
 /**
- * Main fetch function - handles both tracks and playlists
- * @param {string} url - Spotify URL
- * @returns {object} Track or playlist data
+ * Extract track or album from Spotify public embed page
+ * @param {string} type 
+ * @param {string} id 
  */
-async function fetch(url) {
+async function fetchFromEmbed(type, id) {
+    const embedUrl = `https://open.spotify.com/embed/${type}/${id}`;
+    const res = await axios.get(embedUrl, {
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "en-US,en;q=0.9"
+        },
+        timeout: 10000
+    });
+
+    const $ = cheerio.load(res.data);
+    const nextData = $('script#__NEXT_DATA__').html();
+    if (!nextData) throw new Error("Could not find Spotify page data");
+
+    const json = JSON.parse(nextData);
+    const entity = json.props?.pageProps?.state?.data?.entity;
+    if (!entity) throw new Error("Spotify entity not found");
+
+    if (type === "track") {
+        const title = entity.title || entity.name || "";
+        const artist = entity.subtitle || (Array.isArray(entity.artists) ? entity.artists.map(a => a.name).join(", ") : "");
+        return {
+            name: title,
+            tracks: [{
+                title: title.trim(),
+                artist: (artist || "").trim(),
+                duration_ms: entity.duration || 0
+            }]
+        };
+    }
+
+    const tracks = [];
+    for (const item of (entity.trackList || [])) {
+        const title = item.title || item.name || "";
+        const artist = item.subtitle || (Array.isArray(item.artists) ? item.artists.map(a => a.name).join(", ") : "") || entity.subtitle || "";
+        if (title) {
+            tracks.push({
+                title: title.trim(),
+                artist: (artist || "").trim(),
+                duration_ms: item.duration || 0
+            });
+        }
+    }
+
+    return {
+        name: entity.title || entity.name || "Spotify Collection",
+        tracks
+    };
+}
+
+/**
+ * Main fetch function in pure JavaScript
+ * @param {string} url - Spotify URL or URI
+ * @returns {Promise<{ name?: string, tracks: Array<{ title: string, artist: string, duration_ms: number }> }>}
+ */
+async function fetchSpotifyData(url) {
     if (!url || typeof url !== "string") {
         throw new Error("Invalid Spotify URL provided");
     }
 
-    if (url.includes("/track/")) {
-        const track = await getTrackData(url);
-        return { tracks: track ? [track] : [] };
+    const { type, id } = parseSpotifyUrl(url);
+
+    if (type === "playlist") {
+        return await fetchPlaylistAll(id);
     }
 
-    if (url.includes("/playlist/")) {
-        return await getPlaylistData(url);
+    if (type === "track") {
+        return await fetchFromEmbed("track", id);
     }
 
-    throw new Error("Only Spotify track and playlist links are supported");
+    if (type === "album") {
+        return await fetchFromEmbed("album", id);
+    }
+
+    // Default fallback
+    return await fetchFromEmbed("playlist", id || url);
 }
 
-// CLI usage
-if (require.main === module) {
-    const url = process.argv[2];
-
-    if (!url) {
-        console.log(JSON.stringify({ error: "Usage: spotify_bridge.js <Spotify URL>" }));
-        process.exit(2);
-    }
-
-    fetch(url)
-        .then(result => {
-            console.log(JSON.stringify(result, null, 0));
-            process.exit(0);
-        })
-        .catch(error => {
-            console.log(JSON.stringify({ error: error.message }, null, 0));
-            process.exit(1);
-        });
+async function getTrackData(url) {
+    const res = await fetchSpotifyData(url);
+    return res.tracks[0] || null;
 }
 
-module.exports = { fetch, getTrackData, getPlaylistData };
+async function getPlaylistData(url) {
+    return await fetchSpotifyData(url);
+}
+
+module.exports = {
+    fetch: fetchSpotifyData,
+    fetchSpotifyData,
+    getTrackData,
+    getPlaylistData
+};

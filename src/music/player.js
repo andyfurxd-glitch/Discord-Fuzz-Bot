@@ -7,7 +7,10 @@ const {
 } = require("@discordjs/voice");
 
 const { spawn, execFile } = require("child_process");
-const { getOrCreateQueue } = require("./queue");
+const { getOrCreateQueue, getQueue, clearQueueTimeouts, deleteQueue } = require("./queue");
+
+const IDLE_TIMEOUT_MS = 2 * 60 * 1000; // 2 minutes when queue is finished
+const EMPTY_TIMEOUT_MS = 60 * 1000;    // 1 minute when channel is empty
 
 const players = new Map();
 // Keep track of active processes per guild so we can kill them on skip/stop
@@ -64,12 +67,26 @@ function findYouTubeMatch(song) {
 
     return new Promise(resolve => {
         execFile("yt-dlp", [
-            "--print", "%(webpage_url)s",
+            "--print", "%(webpage_url)s---%(duration)s",
             "--no-playlist",
             "--extractor-args", "youtube:player_client=android",
             search
-        ], { maxBuffer: 1024 * 1024 }, (error, stdout) => {
-            const url = !error && stdout.trim().split(/\r?\n/).find(Boolean);
+        ], { timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+            if (error || !stdout) {
+                resolve(null);
+                return;
+            }
+            const firstLine = stdout.trim().split(/\r?\n/).find(Boolean);
+            if (!firstLine) {
+                resolve(null);
+                return;
+            }
+            const parts = firstLine.split("---");
+            const url = parts[0]?.trim();
+            const durationSec = parseFloat(parts[1]);
+            if (durationSec > 0 && (!song.durationMs || song.durationMs <= 0)) {
+                song.durationMs = durationSec * 1000;
+            }
             resolve(url || null);
         });
     });
@@ -77,14 +94,14 @@ function findYouTubeMatch(song) {
 
 function prefetchQueueURLs(queue, limit = 5, onFirstReady = null) {
     // Prefetch YouTube URLs for Spotify songs in queue.
-    // Start all searches in parallel and fire the callback once the first
-    // Spotify song actually resolves to a URL.
     let firstSongReady = false;
 
     for (let i = 0; i < Math.min(limit, queue.songs.length); i++) {
         const song = queue.songs[i];
-        if (song && song.spotifySearch && !song.url) {
+        if (song && song.spotifySearch && !song.url && !song.isResolving) {
+            song.isResolving = true;
             findYouTubeMatch(song).then(url => {
+                song.isResolving = false;
                 if (url && !song.url) {
                     song.url = url;
 
@@ -92,8 +109,15 @@ function prefetchQueueURLs(queue, limit = 5, onFirstReady = null) {
                         firstSongReady = true;
                         onFirstReady();
                     }
+
+                    // If queue is idle waiting for the next song, trigger playback immediately
+                    if (queue.guildId && !queue.current && !queue.loading) {
+                        playNext(queue.guildId);
+                    }
                 }
-            }).catch(() => { });
+            }).catch(() => {
+                song.isResolving = false;
+            });
         }
     }
 }
@@ -131,10 +155,14 @@ async function playNext(guildId) {
     if (!queue || queue.songs.length === 0) {
         if (queue) {
             queue.current = null;
+            queue.loading = false;
+            startIdleTimer(guildId);
         }
         return;
     }
 
+    // A song is queued, cancel any idle/inactivity timer
+    clearQueueTimeouts(queue);
     queue.loading = true;
 
     // Prefetch Spotify URLs for upcoming songs in the background.
@@ -163,13 +191,12 @@ async function playNext(guildId) {
 
         if (hasPendingSpotify && !queue.spotifyRetryScheduled) {
             queue.spotifyRetryScheduled = true;
-            console.warn("Spotify track still resolving; retrying once in a moment...");
             setTimeout(() => {
                 queue.spotifyRetryScheduled = false;
                 if (!queue.current && !queue.loading) {
                     playNext(guildId);
                 }
-            }, 700);
+            }, 500);
         }
 
         return;
@@ -216,11 +243,13 @@ async function playNext(guildId) {
         [
             "--no-playlist",
             "-f",
-            "bestaudio/best",
+            "bestaudio[ext=webm]/bestaudio/best",
             "-o",
             "-",
             "--quiet",
             "--no-warnings",
+            "--buffer-size",
+            "16K",
             "--extractor-args",
             "youtube:player_client=android",
             song.url
@@ -235,6 +264,8 @@ async function playNext(guildId) {
         [
             "-hide_banner",
             "-loglevel", "error",
+            "-analyzeduration", "0",
+            "-probesize", "32k",
             "-i", "pipe:0",
             "-f", "s16le",
             "-ar", "48000",
@@ -300,12 +331,107 @@ async function playNext(guildId) {
     const resource = createAudioResource(
         ffmpeg.stdout,
         {
-            inputType: StreamType.Raw
+            inputType: StreamType.Raw,
+            inlineVolume: false
         }
     );
 
     started = true;
     audioPlayer.play(resource);
+}
+
+function startIdleTimer(guildId) {
+    const queue = getQueue(guildId);
+    if (!queue || queue.idleTimeout) return;
+
+    queue.idleTimeout = setTimeout(() => {
+        const currentQueue = getQueue(guildId);
+        if (currentQueue && !currentQueue.current && currentQueue.songs.length === 0) {
+            console.log(`💤 [Inactivity] Queue finished in guild ${guildId}; leaving voice channel.`);
+            leaveVoiceChannel(
+                guildId,
+                "💤 **The music den has been quiet for a while...** 🐾\n*FuzzBot curled up for a nap and left the voice channel to save energy.*"
+            );
+        }
+    }, IDLE_TIMEOUT_MS);
+}
+
+function leaveVoiceChannel(guildId, reasonMessage = null) {
+    cleanupProcesses(guildId);
+
+    const queue = getQueue(guildId);
+    if (queue) {
+        clearQueueTimeouts(queue);
+
+        if (reasonMessage && queue.textChannel) {
+            queue.textChannel.send({ content: reasonMessage }).catch(() => { });
+        }
+
+        if (queue.connection) {
+            try {
+                queue.connection.destroy();
+            } catch (e) { }
+            queue.connection = null;
+        }
+
+        deleteQueue(guildId);
+    }
+
+    const audioPlayer = players.get(guildId);
+    if (audioPlayer) {
+        try { audioPlayer.stop(); } catch (e) { }
+        players.delete(guildId);
+    }
+}
+
+function handleVoiceStateUpdate(oldState, newState) {
+    const guild = oldState.guild || newState.guild;
+    if (!guild) return;
+    const guildId = guild.id;
+
+    const queue = getQueue(guildId);
+    if (!queue || !queue.connection) return;
+
+    const botMember = guild.members.me;
+    if (!botMember) return;
+
+    // Check if the bot itself was disconnected/kicked from the voice channel
+    if (oldState.member?.id === botMember.id && !newState.channelId) {
+        console.log(`🐾 [Voice] FuzzBot was disconnected from voice in guild ${guildId}.`);
+        leaveVoiceChannel(guildId);
+        return;
+    }
+
+    const botChannelId = botMember.voice?.channelId || queue.voiceChannelId;
+    if (!botChannelId) return;
+
+    const voiceChannel = guild.channels.cache.get(botChannelId);
+    if (!voiceChannel || !voiceChannel.isVoiceBased()) return;
+
+    const humanMembers = voiceChannel.members.filter(member => !member.user.bot);
+
+    if (humanMembers.size === 0) {
+        if (!queue.emptyTimeout) {
+            console.log(`🐾 [Inactivity] Voice channel is empty in guild ${guildId}. Starting 1-minute exit timer.`);
+            queue.emptyTimeout = setTimeout(() => {
+                const currentChannel = guild.channels.cache.get(botChannelId);
+                const currentHumans = currentChannel?.members?.filter(member => !member.user.bot);
+                if (!currentHumans || currentHumans.size === 0) {
+                    console.log(`🦊 [Inactivity] Voice channel remained empty in guild ${guildId}; leaving.`);
+                    leaveVoiceChannel(
+                        guildId,
+                        "🦊 **Everyone left the den!** 🐾\n*FuzzBot tucked its tail and headed back to bed.*"
+                    );
+                }
+            }, EMPTY_TIMEOUT_MS);
+        }
+    } else {
+        if (queue.emptyTimeout) {
+            console.log(`🐾 [Inactivity] A floof returned to voice in guild ${guildId}! Cancelling exit timer.`);
+            clearTimeout(queue.emptyTimeout);
+            queue.emptyTimeout = null;
+        }
+    }
 }
 
 function stopPlayback(guildId) {
@@ -317,17 +443,22 @@ function stopPlayback(guildId) {
         audioPlayer.stop();
     }
 
-    const queue = getOrCreateQueue(guildId, audioPlayer);
-
-    queue.songs = [];
-    queue.current = null;
-    queue.loading = false;
+    const queue = getQueue(guildId);
+    if (queue) {
+        clearQueueTimeouts(queue);
+        queue.songs = [];
+        queue.current = null;
+        queue.loading = false;
+    }
 }
 
 module.exports = {
     getPlayer,
     playNext,
     stopPlayback,
+    leaveVoiceChannel,
+    startIdleTimer,
+    handleVoiceStateUpdate,
     prefetchQueueURLs,
     fetchDuration
 };

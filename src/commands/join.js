@@ -27,8 +27,10 @@ module.exports = {
 
             const queue = getOrCreateQueue(
                 interaction.guild.id,
-                player
+                player,
+                interaction.channel
             );
+            queue.voiceChannelId = voiceChannel.id;
 
             // Already connected to this channel
             if (queue.connection) {
@@ -46,6 +48,9 @@ module.exports = {
             });
 
             queue.connection.subscribe(player);
+
+            const { startIdleTimer } = require("../music/player");
+            startIdleTimer(interaction.guild.id);
 
             await interaction.reply(
                 `🐾 **FuzzBot has scampered into ${voiceChannel.name}!**\n` +

@@ -170,6 +170,21 @@ client.on("interactionCreate", async interaction => {
 
 
 // ============================================================
+// VOICE STATE (AUTO-LEAVE ON EMPTY / DISCONNECT)
+// ============================================================
+
+const { handleVoiceStateUpdate } = require("./music/player");
+
+client.on("voiceStateUpdate", (oldState, newState) => {
+    try {
+        handleVoiceStateUpdate(oldState, newState);
+    } catch (error) {
+        console.error("❌ Error in voiceStateUpdate handler:", error);
+    }
+});
+
+
+// ============================================================
 // LOGIN
 // ============================================================
 
