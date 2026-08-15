@@ -21,7 +21,8 @@
     "axios": "^1.19.0",
     "cheerio": "^1.2.0",
     "discord.js": "latest",
-    "dotenv": "latest"
+    "dotenv": "latest",
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "nodemon": "latest"
