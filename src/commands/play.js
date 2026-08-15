@@ -1,10 +1,10 @@
 const { SlashCommandBuilder } = require("discord.js");
 const { joinVoiceChannel } = require("@discordjs/voice");
-const { execFile } = require("child_process");
 const path = require("path");
 
 const { getOrCreateQueue } = require("../music/queue");
 const { getPlayer, playNext, prefetchQueueURLs, fetchDuration } = require("../music/player");
+const { fetch: fetchSpotifyData } = require("../music/spotify_bridge");
 
 // ---------------------------------------------------------
 // SHUFFLE
@@ -38,38 +38,26 @@ function formatDuration(durationMs) {
 // GET SPOTIFY TRACK INFO
 // ---------------------------------------------------------
 
-function getScrapedSpotifyTracks(url) {
-    const scriptPath = path.join(__dirname, "..", "music", "spotify_bridge.py");
+async function getScrapedSpotifyTracks(url) {
+    try {
+        const result = await fetchSpotifyData(url);
 
-    return new Promise((resolve, reject) => {
-        execFile("python", [scriptPath, url], {
-            timeout: 20000,
-            maxBuffer: 1024 * 1024 * 10,
-            windowsHide: true
-        }, (error, stdout, stderr) => {
-            let result;
+        if (result.error) {
+            throw new Error(result.error);
+        }
 
-            try {
-                result = JSON.parse(stdout);
-            } catch {
-                return reject("🐾 **Awoo...** I couldn't read that Spotify playlist.");
-            }
+        const tracks = (result.tracks || []).map(track => ({
+            title: track.title,
+            artist: track.artist,
+            durationMs: track.duration_ms || track.durationMs || 0,
+            spotifySearch: true
+        }));
 
-            if (error || result.error) {
-                console.error("Spotify playlist helper:", stderr || result.error || error.message);
-                return reject("🐾 **Awoo...** I couldn't read that Spotify playlist.");
-            }
-
-            const tracks = (result.tracks || []).map(track => ({
-                title: track.title,
-                artist: track.artist,
-                durationMs: track.duration_ms || track.durationMs || 0,
-                spotifySearch: true
-            }));
-
-            resolve(tracks);
-        });
-    });
+        return tracks;
+    } catch (error) {
+        console.error("Spotify playlist helper:", error.message);
+        throw new Error("🐾 **Awoo...** I couldn't read that Spotify playlist.");
+    }
 }
 
 
