@@ -85,7 +85,7 @@ async function resolveTracks(query) {
             const tracks = await getScrapedSpotifyTracks(query);
 
             if (!tracks.length) {
-                throw new Error("Spotify playlist has no playable tracks");
+                throw new Error("🐾 **Hmm...** That Spotify playlist has no tracks to pounce on!");
             }
 
             return tracks;
@@ -127,8 +127,8 @@ async function resolveTracks(query) {
             );
 
             throw (
-                "😿 **Awoo...** I couldn't identify that Spotify song.\n" +
-                "Try searching the song name directly for now."
+                "� **Awoo...** Couldn't sniff out that Spotify track.\n" +
+                "Try searching by name? *Ears droop in sadness...*"
             );
         }
     }
@@ -289,9 +289,10 @@ module.exports = {
 
         await interaction.deferReply();
 
+        // Show loading state immediately (ephemeral)
         await interaction.editReply(
-            "🐾 **Sniffing out your music...** 🎵\n" +
-            "*FuzzBot is fetching the floofiest tunes!*"
+            "🐾 **Sniffing out your music...** 🐺🎵\n" +
+            "*Whiskers twitching with excitement~*"
         );
 
 
@@ -416,23 +417,21 @@ module.exports = {
                     const durationText = formatDuration(durationMs);
                     await interaction.editReply(
                         `🎵 **Now pouncing:** ${songs[0].title}${songs[0].artist ? ` — *${songs[0].artist}*` : ""}\n\n` +
-                        `⏱️ Duration: **${durationText}**`
+                        `⏱️ Duration: **${durationText}** 🐾`
                     );
                 } else {
                     await interaction.editReply(
-                        `🐾 **Added to the cuddle queue!**\n\n` +
+                        `🐾 **Added to the cuddle queue!** 🎶\n\n` +
                         `🎵 **${songs[0].title}**\n` +
-                        `📋 Position in den: **${queue.songs.length}**`
+                        `📍 Position in den: **${queue.songs.length}**`
                     );
                 }
 
             } else {
-
                 await interaction.editReply(
-
-                    `🐾 **Ooh, a whole playlist!** ✨\n` +
-
-                    `🎵 Loaded **${songs.length}** cozy tracks into the den!`
+                    `🐾 **Ooh, a whole playlist!** ✨🎶\n` +
+                    `🎵 Loaded **${songs.length}** cozy tracks into the den!\n` +
+                    `*Tail wagging intensifies...*`
                 );
             }
 

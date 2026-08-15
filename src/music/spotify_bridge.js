@@ -12,7 +12,7 @@ async function getTrackData(url) {
             headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             },
-            timeout: 10000
+            timeout: 8000
         });
 
         const $ = cheerio.load(response.data);
@@ -75,7 +75,7 @@ async function getPlaylistData(url) {
             headers: {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             },
-            timeout: 15000
+            timeout: 10000
         });
 
         const $ = cheerio.load(response.data);
