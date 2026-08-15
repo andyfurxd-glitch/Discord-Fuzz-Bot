@@ -69,9 +69,11 @@ function findYouTubeMatch(song) {
         execFile("yt-dlp", [
             "--print", "%(webpage_url)s---%(duration)s",
             "--no-playlist",
-            "--extractor-args", "youtube:player_client=android",
+            "--extractor-args", "youtube:player_client=web_embedded,android",
+            "--socket-timeout", "15",
+            "--retries", "3",
             search
-        ], { timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+        ], { timeout: 25000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
             if (error || !stdout) {
                 resolve(null);
                 return;
@@ -250,8 +252,10 @@ async function playNext(guildId) {
             "--no-warnings",
             "--buffer-size",
             "16K",
+            "--socket-timeout", "15",
+            "--retries", "3",
             "--extractor-args",
-            "youtube:player_client=android",
+            "youtube:player_client=web_embedded,android",
             song.url
         ],
         {

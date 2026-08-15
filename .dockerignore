@@ -1,5 +1,6 @@
 node_modules
-npm-debug.log
+npm-debug.log*
+*.log
 .git
 .gitignore
 .env
@@ -7,3 +8,5 @@ npm-debug.log
 .DS_Store
 Thumbs.db
 *.backup.js
+README.md
+.github

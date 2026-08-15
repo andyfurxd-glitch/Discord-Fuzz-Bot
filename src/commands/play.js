@@ -159,7 +159,9 @@ function resolveYouTube(searchArg) {
         "--print",
         "%(title)s---%(webpage_url)s---%(duration)s",
         "--extractor-args",
-        "youtube:player_client=android"
+        "youtube:player_client=web_embedded,android",
+        "--socket-timeout", "15",
+        "--retries", "3"
     ];
 
     if (isPlaylist) {
@@ -176,7 +178,7 @@ function resolveYouTube(searchArg) {
             "yt-dlp",
             args,
             {
-                timeout: isPlaylist ? 25000 : 8000,
+                timeout: isPlaylist ? 60000 : 20000,
                 maxBuffer: 1024 * 1024 * 10
             },
 

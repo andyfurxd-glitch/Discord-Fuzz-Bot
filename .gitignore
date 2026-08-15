@@ -1,9 +1,9 @@
 node_modules/
 .env
+.env.local
 .cache/
-__pycache__/
-**/__pycache__/
-*.pyc
-*.pyo
-*.pyd
+npm-debug.log*
+*.log
 .DS_Store
+Thumbs.db
+*.backup.js
