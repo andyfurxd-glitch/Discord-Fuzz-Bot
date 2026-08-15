@@ -4,15 +4,16 @@
 # ────────────────────────────────────────────────────────────
 FROM node:20-slim
 
-# Install system dependencies
+# Install system dependencies (Adding ca-certificates fixes the curl 77 error)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        curl \
+    ffmpeg \
+    curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install yt-dlp as a standalone binary (no Python needed)
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-        -o /usr/local/bin/yt-dlp \
+    -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp
 
 # Set working directory
