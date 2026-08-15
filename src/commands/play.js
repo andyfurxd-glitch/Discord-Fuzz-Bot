@@ -1,5 +1,6 @@
 const { SlashCommandBuilder } = require("discord.js");
 const { joinVoiceChannel } = require("@discordjs/voice");
+const { execFile } = require("child_process");
 const path = require("path");
 
 const { getOrCreateQueue } = require("../music/queue");
