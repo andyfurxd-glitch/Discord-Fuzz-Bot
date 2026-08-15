@@ -16,8 +16,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "latest",
+    "opusscript": "^0.1.1",
     "axios": "^1.19.0",
     "cheerio": "^1.2.0",
     "discord.js": "latest",
